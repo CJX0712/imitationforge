@@ -1,0 +1,7 @@
+# 锁定依赖（CI / 生产可复现构建）。作者：晨星
+numpy==2.5.3
+scipy==1.18.1
+scikit-learn==1.9.1
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.10
