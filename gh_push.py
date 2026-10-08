@@ -8,11 +8,10 @@
 每一步失败即降级下一级；全失败才非零退出。成功后打 v0.1.0 tag 并建 Release。
 
 用法:
-  python gh_push.py            # 执行推送 + tag + release
-  python gh_push.py --dry     # 仅打印计划，不执行任何写操作
-  python gh_push.py --no-release  # 推代码但不建 Release
+  python gh_push.py              # 执行推送 + tag + release
+  python gh_push.py --dry        # 仅打印计划，不执行任何写操作
+  python gh_push.py --no-release # 推代码但不建 Release
 """
-
 from __future__ import annotations
 
 import argparse
@@ -20,6 +19,7 @@ import base64
 import json
 import os
 import subprocess
+import tempfile
 
 REPO = "CJX0712/imitationforge"
 TAG = "v0.1.0"
@@ -29,31 +29,11 @@ AUTHOR_EMAIL = "CJX0712@users.noreply.github.com"
 COMMIT_MSG = "ImitationForge v0.1.0 · 世界顶级模仿学习基准（BC/DAGGER/ImiteFuse）"
 
 EXCLUDE = {
-    ".git",
-    ".ruff_cache",
-    ".pytest_cache",
-    "__pycache__",
-    ".github",
-    ".coverage",
-    "benchmark.json",
-    "benchmark_quick.json",
-    "private_key.txt",
+    ".git", ".ruff_cache", ".pytest_cache", "__pycache__", ".github",
+    ".coverage", "benchmark.json", "benchmark_quick.json", "private_key.txt",
 }
-SCAN_EXTS = (
-    ".py",
-    ".md",
-    ".txt",
-    ".toml",
-    ".yml",
-    ".yaml",
-    ".cfg",
-    ".ini",
-    ".lock",
-    ".lock.txt",
-    ".gitignore",
-    ".dockerfile",
-    "",
-)
+SCAN_EXTS = (".py", ".md", ".txt", ".toml", ".yml", ".yaml", ".cfg", ".ini",
+             ".lock", ".lock.txt", ".gitignore", ".dockerfile", "")
 
 
 def run(cmd, check=True):
@@ -64,9 +44,32 @@ def run(cmd, check=True):
     return r
 
 
-def gh(*args):
-    r = run(["gh", *args])
+def gh_api(method: str, endpoint: str, payload: dict | None = None) -> str:
+    """调用 gh api；payload 经临时文件传入（gh api 无 --body，仅 --input）。"""
+    args = ["gh", "api", endpoint, "-X", method]
+    if payload is not None:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+            path = fh.name
+        args += ["--input", path]
+        try:
+            r = run(args)
+        finally:
+            os.unlink(path)
+    else:
+        r = run(args)
     return r.stdout.strip()
+
+
+def gh_view_repo() -> bool:
+    r = run(["gh", "repo", "view", REPO, "--json", "name"], check=False)
+    return r.returncode == 0
+
+
+def gh_create_repo() -> None:
+    run(["gh", "repo", "create", REPO, "--public",
+         "--description", "ImitationForge · 世界顶级模仿学习基准（BC/DAGGER/ImiteFuse），作者晨星"])
 
 
 def collect_files(root="."):
@@ -91,28 +94,8 @@ def push_l1():
     run(["git", "config", "user.name", AUTHOR_NAME])
     run(["git", "config", "user.email", AUTHOR_EMAIL])
 
-    # 仓库不存在则创建
-    try:
-        gh("repo", "view", REPO, "--json", "name")
-    except RuntimeError:
-        try:
-            gh(
-                "repo",
-                "create",
-                REPO,
-                "--public",
-                "--description",
-                "ImitationForge · 世界顶级模仿学习基准（BC/DAGGER/ImiteFuse），作者晨星",
-                "--source",
-                ".",
-                "--branch",
-                BRANCH,
-                "--push",
-            )
-            print("[L1] gh repo create --push 完成（含初始推送）")
-            return True
-        except RuntimeError as e:
-            print(f"[L1] repo create 失败，尝试手动 add/commit/push: {e}")
+    if not gh_view_repo():
+        gh_create_repo()
 
     rem = run(["git", "remote"]).stdout
     if "origin" not in rem:
@@ -120,17 +103,8 @@ def push_l1():
     run(["git", "add", "-A"])
     status = run(["git", "status", "--porcelain"]).stdout.strip()
     if status:
-        run(
-            [
-                "git",
-                "commit",
-                "-q",
-                "-m",
-                COMMIT_MSG,
-                "--author",
-                f"{AUTHOR_NAME} <{AUTHOR_EMAIL}>",
-            ]
-        )
+        run(["git", "commit", "-q", "-m", COMMIT_MSG,
+             "--author", f"{AUTHOR_NAME} <{AUTHOR_EMAIL}>"])
     r = run(["git", "push", "-u", "origin", BRANCH], check=False)
     if r.returncode != 0:
         raise RuntimeError(f"git push 失败:\n{r.stderr}")
@@ -145,69 +119,34 @@ def push_l2():
     for path in files:
         with open(path, "rb") as fh:
             content = fh.read()
-        body = json.dumps(
-            {"content": base64.b64encode(content).decode(), "encoding": "base64"}
-        )
-        out = gh("api", f"repos/{REPO}/git/blobs", "-X", "POST", "--body", body)
+        out = gh_api("POST", f"repos/{REPO}/git/blobs",
+                     {"content": base64.b64encode(content).decode(),
+                      "encoding": "base64"})
         blobs[path] = json.loads(out)["sha"]
 
-    tree = [
-        {"path": p, "mode": "100644", "type": "blob", "sha": blobs[p]} for p in files
-    ]
-    out = gh(
-        "api",
-        f"repos/{REPO}/git/trees",
-        "-X",
-        "POST",
-        "--body",
-        json.dumps({"tree": tree}),
-    )
-    tree_sha = json.loads(out)["sha"]
+    tree = [{"path": p, "mode": "100644", "type": "blob", "sha": blobs[p]}
+            for p in files]
+    tree_sha = json.loads(gh_api("POST", f"repos/{REPO}/git/trees",
+                                 {"tree": tree}))["sha"]
 
-    # base commit（空仓则无父）
     parents = []
     try:
-        ref = gh("api", f"repos/{REPO}/git/ref/heads/{BRANCH}")
+        ref = gh_api("GET", f"repos/{REPO}/git/ref/heads/{BRANCH}")
         parents = [json.loads(ref)["object"]["sha"]]
     except RuntimeError:
         pass
 
-    out = gh(
-        "api",
-        f"repos/{REPO}/git/commits",
-        "-X",
-        "POST",
-        "--body",
-        json.dumps(
-            {
-                "message": COMMIT_MSG,
-                "tree": tree_sha,
-                "parents": parents,
-                "author": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
-                "committer": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
-            }
-        ),
-    )
-    commit_sha = json.loads(out)["sha"]
+    commit_sha = json.loads(gh_api("POST", f"repos/{REPO}/git/commits",
+                                   {"message": COMMIT_MSG, "tree": tree_sha,
+                                    "parents": parents,
+                                    "author": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
+                                    "committer": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL}}))["sha"]
 
     if parents:
-        gh(
-            "api",
-            f"repos/{REPO}/git/refs/heads/{BRANCH}",
-            "-X",
-            "PATCH",
-            "--body",
-            json.dumps({"sha": commit_sha}),
-        )
+        gh_api("PATCH", f"repos/{REPO}/git/refs/heads/{BRANCH}", {"sha": commit_sha})
     else:
-        gh(
-            "api",
-            f"repos/{REPO}/git/refs",
-            "-X",
-            "POST",
-            "--body",
-            json.dumps({"ref": f"refs/heads/{BRANCH}", "sha": commit_sha}),
-        )
+        gh_api("POST", f"repos/{REPO}/git/refs",
+               {"ref": f"refs/heads/{BRANCH}", "sha": commit_sha})
     print("[L2] Git Data API 推送成功")
     return True
 
@@ -225,34 +164,24 @@ def push_l3():
             "author": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
             "committer": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
         }
-        # 已存在则需带 sha
         try:
-            existing = gh("api", f"repos/{REPO}/contents/{path}")
+            existing = gh_api("GET", f"repos/{REPO}/contents/{path}")
             body["sha"] = json.loads(existing)["sha"]
         except RuntimeError:
             pass
-        gh(
-            "api",
-            f"repos/{REPO}/contents/{path}",
-            "-X",
-            "PUT",
-            "--body",
-            json.dumps(body),
-        )
+        gh_api("PUT", f"repos/{REPO}/contents/{path}", body)
     print("[L3] Contents API 推送成功")
     return True
 
 
 def tag_and_release():
-    # 本地 tag（若走 L1 且 git 可用）
     try:
-        run(["git", "tag", "-a", TAG, "-m", f"{COMMIT_MSG}", "--force"], check=False)
+        run(["git", "tag", "-a", TAG, "-m", COMMIT_MSG, "--force"], check=False)
         run(["git", "push", "origin", TAG, "--force"], check=False)
         print(f"[tag] 已打 {TAG}")
     except Exception as e:  # noqa: BLE001
         print(f"[tag] 本地 tag 跳过: {e}")
 
-    # Release（幂等：已存在则更新）
     notes = (
         "## ImitationForge v0.1.0\n\n"
         "世界顶级模仿学习基准（作者：晨星）。\n\n"
@@ -263,19 +192,14 @@ def tag_and_release():
         "详见 README.md 与 docs/。"
     )
     try:
-        gh(
-            "release",
-            "create",
-            TAG,
-            "--title",
-            f"ImitationForge {TAG}",
-            "--notes",
-            notes,
-            "--latest",
-        )
+        gh_api("POST", f"repos/{REPO}/releases",
+               {"tag_name": TAG, "name": f"ImitationForge {TAG}",
+                "body": notes, "prerelease": False})
         print(f"[release] 已创建 {TAG} Release")
     except RuntimeError:
-        gh("release", "edit", TAG, "--notes", notes)
+        rel = gh_api("GET", f"repos/{REPO}/releases/tags/{TAG}")
+        rid = json.loads(rel)["id"]
+        gh_api("PATCH", f"repos/{REPO}/releases/{rid}", {"body": notes})
         print(f"[release] 已更新 {TAG} Release")
 
 
@@ -293,11 +217,8 @@ def main():
         print("[dry] 不执行任何写操作")
         return 0
 
-    for level, fn in (
-        ("L1 git", push_l1),
-        ("L2 GitData", push_l2),
-        ("L3 Contents", push_l3),
-    ):
+    for level, fn in (("L1 git", push_l1), ("L2 GitData", push_l2),
+                      ("L3 Contents", push_l3)):
         try:
             fn()
             break
