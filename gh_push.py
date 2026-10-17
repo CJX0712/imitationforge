@@ -12,6 +12,7 @@
   python gh_push.py --dry        # 仅打印计划，不执行任何写操作
   python gh_push.py --no-release # 推代码但不建 Release
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,11 +30,31 @@ AUTHOR_EMAIL = "CJX0712@users.noreply.github.com"
 COMMIT_MSG = "ImitationForge v0.1.0 · 世界顶级模仿学习基准（BC/DAGGER/ImiteFuse）"
 
 EXCLUDE = {
-    ".git", ".ruff_cache", ".pytest_cache", "__pycache__", ".github",
-    ".coverage", "benchmark.json", "benchmark_quick.json", "private_key.txt",
+    ".git",
+    ".ruff_cache",
+    ".pytest_cache",
+    "__pycache__",
+    ".github",
+    ".coverage",
+    "benchmark.json",
+    "benchmark_quick.json",
+    "private_key.txt",
 }
-SCAN_EXTS = (".py", ".md", ".txt", ".toml", ".yml", ".yaml", ".cfg", ".ini",
-             ".lock", ".lock.txt", ".gitignore", ".dockerfile", "")
+SCAN_EXTS = (
+    ".py",
+    ".md",
+    ".txt",
+    ".toml",
+    ".yml",
+    ".yaml",
+    ".cfg",
+    ".ini",
+    ".lock",
+    ".lock.txt",
+    ".gitignore",
+    ".dockerfile",
+    "",
+)
 
 
 def run(cmd, check=True):
@@ -48,8 +69,9 @@ def gh_api(method: str, endpoint: str, payload: dict | None = None) -> str:
     """调用 gh api；payload 经临时文件传入（gh api 无 --body，仅 --input）。"""
     args = ["gh", "api", endpoint, "-X", method]
     if payload is not None:
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
-                                         encoding="utf-8") as fh:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as fh:
             json.dump(payload, fh, ensure_ascii=False)
             path = fh.name
         args += ["--input", path]
@@ -68,8 +90,17 @@ def gh_view_repo() -> bool:
 
 
 def gh_create_repo() -> None:
-    run(["gh", "repo", "create", REPO, "--public",
-         "--description", "ImitationForge · 世界顶级模仿学习基准（BC/DAGGER/ImiteFuse），作者晨星"])
+    run(
+        [
+            "gh",
+            "repo",
+            "create",
+            REPO,
+            "--public",
+            "--description",
+            "ImitationForge · 世界顶级模仿学习基准（BC/DAGGER/ImiteFuse），作者晨星",
+        ]
+    )
 
 
 def collect_files(root="."):
@@ -103,8 +134,17 @@ def push_l1():
     run(["git", "add", "-A"])
     status = run(["git", "status", "--porcelain"]).stdout.strip()
     if status:
-        run(["git", "commit", "-q", "-m", COMMIT_MSG,
-             "--author", f"{AUTHOR_NAME} <{AUTHOR_EMAIL}>"])
+        run(
+            [
+                "git",
+                "commit",
+                "-q",
+                "-m",
+                COMMIT_MSG,
+                "--author",
+                f"{AUTHOR_NAME} <{AUTHOR_EMAIL}>",
+            ]
+        )
     r = run(["git", "push", "-u", "origin", BRANCH], check=False)
     if r.returncode != 0:
         raise RuntimeError(f"git push 失败:\n{r.stderr}")
@@ -119,15 +159,19 @@ def push_l2():
     for path in files:
         with open(path, "rb") as fh:
             content = fh.read()
-        out = gh_api("POST", f"repos/{REPO}/git/blobs",
-                     {"content": base64.b64encode(content).decode(),
-                      "encoding": "base64"})
+        out = gh_api(
+            "POST",
+            f"repos/{REPO}/git/blobs",
+            {"content": base64.b64encode(content).decode(), "encoding": "base64"},
+        )
         blobs[path] = json.loads(out)["sha"]
 
-    tree = [{"path": p, "mode": "100644", "type": "blob", "sha": blobs[p]}
-            for p in files]
-    tree_sha = json.loads(gh_api("POST", f"repos/{REPO}/git/trees",
-                                 {"tree": tree}))["sha"]
+    tree = [
+        {"path": p, "mode": "100644", "type": "blob", "sha": blobs[p]} for p in files
+    ]
+    tree_sha = json.loads(gh_api("POST", f"repos/{REPO}/git/trees", {"tree": tree}))[
+        "sha"
+    ]
 
     parents = []
     try:
@@ -136,17 +180,28 @@ def push_l2():
     except RuntimeError:
         pass
 
-    commit_sha = json.loads(gh_api("POST", f"repos/{REPO}/git/commits",
-                                   {"message": COMMIT_MSG, "tree": tree_sha,
-                                    "parents": parents,
-                                    "author": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
-                                    "committer": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL}}))["sha"]
+    commit_sha = json.loads(
+        gh_api(
+            "POST",
+            f"repos/{REPO}/git/commits",
+            {
+                "message": COMMIT_MSG,
+                "tree": tree_sha,
+                "parents": parents,
+                "author": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
+                "committer": {"name": AUTHOR_NAME, "email": AUTHOR_EMAIL},
+            },
+        )
+    )["sha"]
 
     if parents:
         gh_api("PATCH", f"repos/{REPO}/git/refs/heads/{BRANCH}", {"sha": commit_sha})
     else:
-        gh_api("POST", f"repos/{REPO}/git/refs",
-               {"ref": f"refs/heads/{BRANCH}", "sha": commit_sha})
+        gh_api(
+            "POST",
+            f"repos/{REPO}/git/refs",
+            {"ref": f"refs/heads/{BRANCH}", "sha": commit_sha},
+        )
     print("[L2] Git Data API 推送成功")
     return True
 
@@ -192,9 +247,16 @@ def tag_and_release():
         "详见 README.md 与 docs/。"
     )
     try:
-        gh_api("POST", f"repos/{REPO}/releases",
-               {"tag_name": TAG, "name": f"ImitationForge {TAG}",
-                "body": notes, "prerelease": False})
+        gh_api(
+            "POST",
+            f"repos/{REPO}/releases",
+            {
+                "tag_name": TAG,
+                "name": f"ImitationForge {TAG}",
+                "body": notes,
+                "prerelease": False,
+            },
+        )
         print(f"[release] 已创建 {TAG} Release")
     except RuntimeError:
         rel = gh_api("GET", f"repos/{REPO}/releases/tags/{TAG}")
@@ -217,8 +279,11 @@ def main():
         print("[dry] 不执行任何写操作")
         return 0
 
-    for level, fn in (("L1 git", push_l1), ("L2 GitData", push_l2),
-                      ("L3 Contents", push_l3)):
+    for level, fn in (
+        ("L1 git", push_l1),
+        ("L2 GitData", push_l2),
+        ("L3 Contents", push_l3),
+    ):
         try:
             fn()
             break
